@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Local Diffusers Studio — Qwen-Image-2.1</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div class="app">
+
+  <!-- ===================== ヘッダー ===================== -->
+  <header class="hero">
+    <div class="hero-left">
+      <div class="eyebrow mono">LOCAL DIFFUSERS STUDIO</div>
+      <h1>言葉とイメージから、<br /><span class="grad">次の一枚をつくる。</span></h1>
+    </div>
+    <p class="hero-desc">Qwen-Image-2.1をローカルGPUで実行。参照画像を追加すると、そのまま編集モードになります。</p>
+  </header>
+
+  <!-- ===================== メイングリッド ===================== -->
+  <main class="grid">
+
+    <!-- ============ 左カラム：入力パネル ============ -->
+    <section class="panel-col">
+
+      <!-- 01 プロンプト -->
+      <div class="card">
+        <div class="card-head">
+          <span class="num mono">01</span>
+          <div>
+            <h2>プロンプト</h2>
+            <p>作りたい映像、または編集内容を入力</p>
+          </div>
+        </div>
+        <textarea id="prompt" rows="4" placeholder="例: 雨の東京。曇りかな夏空の終わり"></textarea>
+
+        <button class="toggle mono" id="neg-toggle" type="button">
+          <span class="caret" id="neg-caret">&#9656;</span> ネガティブプロンプト <em>(CFG使用時のみ)</em>
+        </button>
+        <div class="neg-wrap hidden" id="neg-wrap">
+          <textarea id="negative-prompt" rows="2" placeholder="例: 文字化け、低解像度、変形した手"></textarea>
+        </div>
+      </div>
+
+      <!-- 02 参照画像 -->
+      <div class="card">
+        <div class="card-head">
+          <span class="num mono">02</span>
+          <div>
+            <h2>参照画像</h2>
+            <p id="ref-count">任意・最大10枚</p>
+          </div>
+        </div>
+        <div class="dropzone" id="dropzone">
+          <input type="file" id="file-input" accept="image/*" multiple hidden />
+          <div class="dz-empty" id="dz-empty">
+            <div class="plus">+</div>
+            <p class="dz-main">画像をドロップ</p>
+            <p class="dz-sub">またはクリックして選択</p>
+          </div>
+          <div class="thumbs hidden" id="thumbs"></div>
+        </div>
+      </div>
+
+      <!-- 03 生成設定 -->
+      <div class="card">
+        <div class="card-head">
+          <span class="num mono">03</span>
+          <div>
+            <h2>生成設定</h2>
+            <p>モデルとサンプリング</p>
+          </div>
+        </div>
+
+        <!-- モデル選択 -->
+        <div class="model-opts" id="model-opts">
+          <button type="button" class="mopt active" data-backend="diffusers">
+            Qwen-Image-2.1 <em>BF16 · diffusers</em>
+          </button>
+          <button type="button" class="mopt" data-backend="turbo">
+            Qwen-Image-2.1 Turbo <em>INT8 ConvRot · 8 steps</em>
+          </button>
+        </div>
+        <p id="turbo-note" class="model-note hidden">公式8ステップ・CFG 1固定。編集サイズは参照画像1に追従（32の倍数）。</p>
+        <p id="turbo-status" class="model-note hidden" role="status"></p>
+
+        <div class="presets" id="presets"></div>
+
+        <div class="row2">
+          <label class="field">
+            <span class="lbl">幅</span>
+            <span class="input-wrap">
+              <input type="number" id="width" value="1024" min="256" max="4096" step="8" />
+              <button class="dice" data-target="size" title="ランダムなサイズ" type="button"></button>
+            </span>
+          </label>
+          <label class="field">
+            <span class="lbl">高さ</span>
+            <span class="input-wrap">
+              <input type="number" id="height" value="1024" min="256" max="4096" step="8" />
+              <button class="dice" data-target="size" title="ランダムなサイズ" type="button"></button>
+            </span>
+          </label>
+        </div>
+
+        <div class="row2">
+          <label class="field">
+            <span class="lbl">ステップ</span>
+            <span class="input-wrap">
+              <input type="number" id="steps" value="40" min="1" max="300" step="1" />
+              <button class="dice" data-target="steps" title="ランダム" type="button"></button>
+            </span>
+          </label>
+          <label class="field">
+            <span class="lbl">CFG</span>
+            <span class="input-wrap">
+              <input type="number" id="cfg" value="1" min="0" max="30" step="0.5" />
+              <button class="dice" data-target="cfg" title="ランダム" type="button"></button>
+            </span>
+          </label>
+        </div>
+
+        <label class="field">
+          <span class="lbl"><span>シード</span><span class="hint">(-1でランダム)</span></span>
+          <span class="input-wrap">
+            <input type="number" id="seed" value="-1" step="1" />
+            <button class="dice" data-target="seed" title="ランダムシード" type="button"></button>
+          </span>
+        </label>
+
+        <button class="generate" id="btn-generate" type="button">
+          <span class="spinner hidden" id="btn-spinner"></span>
+          <span class="g-label" id="btn-label">生成する</span>
+          <span class="arrow" id="btn-arrow">&rarr;</span>
+        </button>
+      </div>
+
+    </section>
+
+    <!-- ============ 右カラム：プレビュー ============ -->
+    <section class="card preview">
+      <div class="pv-head">
+        <span class="badge mono" id="mode-badge">TEXT TO IMAGE</span>
+        <h2>プレビュー</h2>
+        <a class="dl mono hidden" id="download" download="qwen-image.png">PNG &darr;</a>
+      </div>
+
+      <div class="pv-body" id="pv-body">
+        <div class="pv-placeholder" id="pv-placeholder">
+          <svg viewBox="0 0 24 24" width="42" height="42" fill="none" stroke="currentColor" stroke-width="1.4">
+            <rect x="3" y="4" width="18" height="16" rx="2.5" />
+            <circle cx="9" cy="10" r="1.8" />
+            <path d="M3 17l5-4.5L12 16l4-3.5 5 4" />
+          </svg>
+          <p>まだ生成されていません</p>
+          <span>プロンプトを入力して「生成する」を押してください</span>
+        </div>
+
+        <img id="result-img" class="hidden" alt="生成結果" />
+
+        <div class="pv-loading hidden" id="pv-loading">
+          <div class="spinner big"></div>
+          <p class="mono" id="loading-text">準備中…</p>
+        </div>
+      </div>
+
+      <footer class="pv-foot mono">
+        <span id="status-bar">cuda:0 · BF16 · 状態取得中…</span>
+        <span id="elapsed-box"></span>
+      </footer>
+    </section>
+
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/app.js"></script>
+</body>
+</html>
