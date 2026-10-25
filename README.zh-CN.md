@@ -2,13 +2,19 @@
 
 [English](README.md) · [日本語](README.ja.md) · **简体中文**
 
-使用Qwen-Image-2.1在本地生成和编辑图像的浏览器应用。可在界面中选择标准Diffusers模型或**Turbo INT8 ConvRot**。图像在本机处理，不发送到外部图像API。
+使用Qwen-Image-2.1在本地生成、编辑图像，并使用MOSS-Image-SFT进行文本／布局生成的浏览器应用。可选择Qwen标准模型、**Turbo INT8 ConvRot**或**MOSS-Image-SFT**。图像在本机处理，不发送到外部图像API。
 
 | 文生图 | 将同一只陶瓷鸟从蓝色改为红色 |
 |---|---|
 | ![Turbo生成的蓝色陶瓷鸟](docs/images/turbo-text-to-image.png) | ![Turbo编辑后的红色陶瓷鸟](docs/images/turbo-image-edit.png) |
 
 实际提示词和参数见[示例说明](docs/SAMPLES.md)。
+
+| MOSS BF16 | MOSS INT8 ConvRot |
+|---|---|
+| ![MOSS BF16生成结果](docs/images/moss-sft-bf16.png) | ![MOSS INT8生成结果](docs/images/moss-sft-int8.png) |
+
+两张图均为1024×1024、50步、CFG 3、种子42的实际输出。[MOSS实测结果和提示词](docs/MOSS_VALIDATION.md)。
 
 ## 支持的平台
 
@@ -55,7 +61,41 @@ Ubuntu/Linux示例：
 
 脚本建立独立的`.venv-turbo`和固定版本的`.vendor/ComfyUI`，不会修改标准模型环境。要复用已有ComfyUI源码，可追加`--comfy-source /path/to/ComfyUI`。无需启动ComfyUI HTTP服务器。
 
-## 使用标准模型
+## 使用MOSS-Image-SFT（Windows / Linux NVIDIA）
+
+完成「1. 安装应用」后运行：
+
+```powershell
+# Windows
+.\.venv\Scripts\python.exe setup_moss.py
+```
+
+```sh
+# Ubuntu/Linux
+.venv/bin/python setup_moss.py
+```
+
+脚本创建独立的`.venv-moss`，将约27.3GB的[官方模型](https://huggingface.co/OpenMOSS-Team/MOSS-Image-SFT)下载至`models/hf-cache/hub`，不修改Qwen/Turbo环境。已有完整官方模型目录时，可追加`--model /path/to/MOSS-Image-SFT`复用。配置保存在不上传的`moss_config.json`。
+
+启动后选择**MOSS-Image-SFT**。官方默认参数：**50步、CFG 3、Flow-matching Euler、shift 5、负分支跳过第[22]层**。Transformer／文本编码器采用BF16，VAE采用FP32，使用CPU随机数生成器。尺寸须为16的倍数；步数和CFG可调，各模型分别记忆参数。
+
+支持自然语言、标签和JSON布局提示词。官方SFT**不支持参考图编辑**：选择MOSS时禁用图像上传，API也会拒绝图像输入；切回Qwen后保留原有参考图。目前要求NVIDIA CUDA，不支持macOS，Linux GPU推理未实机验证。每次任务结束后释放自身GPU资源，不停止其他程序。
+
+权重和官方自定义代码固定到revision `f972bd4b4b9e3852133cc5da954d87bc32cd8fb9`，推理离线运行。安装会下载并执行官方自定义代码，请先查阅[上游项目](https://github.com/OpenMOSS/MOSS-Image)。MOSS遵循[上游Apache-2.0条款](https://huggingface.co/OpenMOSS-Team/MOSS-Image-SFT)。
+
+## 使用MOSS INT8 ConvRot
+
+Windows运行`.\.venv\Scripts\python.exe setup_moss_int8.py`，Linux运行`.venv/bin/python setup_moss_int8.py`，然后选择**MOSS-Image-SFT INT8**。使用[Comfy-Org分发的INT8权重](https://huggingface.co/Comfy-Org/MOSS-Image/tree/24147db865fcdc207270f844777587223fed8d6e)，并非FP8或GGUF：
+
+- DiT：`diffusion_models/moss_image_sft_int8_convrot.safetensors`，约5.41GB。
+- 文本编码器：`text_encoders/qwen3.5_9b_int8_convrot.safetensors`，约9.75GB。
+- VAE：`vae/flux2-vae_small.safetensors`，约0.25GB，以FP32解码。
+
+如已存在固定版`.vendor/ComfyUI`和`.venv-turbo`，则只读复用，不修改它们；否则创建`.venv-moss-int8`。下载总计约15.4GB，配置写入不上传的`moss_int8_config.json`。可通过`--model-dir /path/to/local/snapshot`复用相同目录结构的本地权重。
+
+默认50步、CFG 3、Euler、原生normal调度、shift 5、负分支跳过第22层。原生调度接近官方Diffusers在训练网格取整前的日程，但两种运行时即使种子相同也不保证像素一致。仅支持文本／布局生成，要求NVIDIA CUDA，无需启动ComfyUI服务器。
+
+## 使用Qwen标准模型
 
 Windows/Linux NVIDIA先安装CUDA版PyTorch，再安装标准模型依赖：
 
@@ -92,7 +132,7 @@ macOS / CPU只需运行第二行。首次生成时下载`Qwen/Qwen-Image-2.1`，
 
 ```powershell
 uv pip install --python .venv -r requirements-dev.txt
-.\.venv\Scripts\python.exe -m unittest test_turbo -v
+.\.venv\Scripts\python.exe -m unittest test_turbo test_moss -v
 .\.venv-turbo\Scripts\python.exe check_native_turbo.py
 ```
 

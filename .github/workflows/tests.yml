@@ -12,5 +12,5 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -r requirements-dev.txt
-      - run: python -m unittest test_turbo -v
-      - run: python -m py_compile app.py turbo_worker.py setup_turbo.py
+      - run: python -m unittest test_turbo test_moss -v
+      - run: python -m py_compile app.py turbo_worker.py setup_turbo.py moss_worker.py setup_moss.py moss_int8_worker.py setup_moss_int8.py

@@ -28,8 +28,9 @@ const state = {
   es: null,        // EventSource
   t0: 0,           // 生成開始時刻
   timerId: null,
-  backend: "diffusers",   // diffusers | turbo
-  regularSampling: { steps: "40", cfg: "1" },
+  backend: "diffusers",   // diffusers | turbo | moss | moss_int8
+  sampling: { diffusers: { steps: "40", cfg: "1" }, moss: { steps: "50", cfg: "3" },
+    moss_int8: { steps: "50", cfg: "3" } },
 };
 
 // ---------- DOM参照 ----------
@@ -79,21 +80,25 @@ function bindModelOpts() {
   elModelOpts.querySelectorAll(".mopt").forEach((btn) => {
     btn.addEventListener("click", () => {
       if (state.generating || state.backend === btn.dataset.backend) return;
-      if (btn.dataset.backend === "turbo") {
-        state.regularSampling = { steps: elSteps.value, cfg: elCfg.value };
-        elSteps.value = 8;
-        elCfg.value = 1;
-      } else if (state.backend === "turbo") {
-        elSteps.value = state.regularSampling.steps;
-        elCfg.value = state.regularSampling.cfg;
+      if (state.backend !== "turbo") {
+        state.sampling[state.backend] = { steps: elSteps.value, cfg: elCfg.value };
       }
       state.backend = btn.dataset.backend;
       const turbo = state.backend === "turbo";
+      const moss = state.backend.startsWith("moss");
+      const sampling = turbo ? { steps: "8", cfg: "1" } : state.sampling[state.backend];
+      elSteps.value = sampling.steps;
+      elCfg.value = sampling.cfg;
       [elSteps, elCfg, ...document.querySelectorAll('.dice[data-target="steps"], .dice[data-target="cfg"]')]
         .forEach((el) => { el.disabled = turbo; });
-      [elWidth, elHeight].forEach((el) => { el.step = turbo ? 32 : 8; });
+      [elWidth, elHeight].forEach((el) => { el.step = turbo ? 32 : moss ? 16 : 8; });
       $("#turbo-note").classList.toggle("hidden", !turbo);
       $("#turbo-status").classList.toggle("hidden", !turbo);
+      $("#moss-note").classList.toggle("hidden", !moss);
+      $("#moss-status").classList.toggle("hidden", !moss);
+      elDropzone.setAttribute("aria-disabled", String(moss));
+      elFileInput.disabled = moss;
+      renderRefs();
       elModelOpts.querySelectorAll(".mopt").forEach((b) =>
         b.classList.toggle("active", b === btn)
       );
@@ -180,6 +185,7 @@ function bindEvents() {
 
   // ドロップゾーン: クリックでファイル選択
   elDropzone.addEventListener("click", (e) => {
+    if (state.backend.startsWith("moss")) return;
     if (e.target.closest(".thumb")) return; // サムネイル操作は除外
     elFileInput.click();
   });
@@ -217,6 +223,10 @@ function bindEvents() {
 // 参照画像の管理
 // ============================================================
 async function addFiles(fileList) {
+  if (state.backend.startsWith("moss")) {
+    toast("MOSSはテキスト／レイアウト生成専用です。画像編集にはQwenを選択してください", true);
+    return;
+  }
   const files = Array.from(fileList || []);
   for (const f of files) {
     if (!f.type.startsWith("image/")) continue;
@@ -250,7 +260,8 @@ function removeRef(i) {
 
 function renderRefs() {
   const n = state.refs.length;
-  elRefCount.textContent = n > 0 ? `${n}/${MAX_IMAGES}枚` : "任意・最大10枚";
+  elRefCount.textContent = state.backend.startsWith("moss") ? "MOSSはテキスト／レイアウト生成専用" :
+    n > 0 ? `${n}/${MAX_IMAGES}枚` : "任意・最大10枚";
   elDzEmpty.classList.toggle("hidden", n > 0);
   elThumbs.classList.toggle("hidden", n === 0);
 
@@ -270,7 +281,7 @@ function renderRefs() {
   });
 
   // モードバッジ切替
-  const edit = n > 0;
+  const edit = n > 0 && !state.backend.startsWith("moss");
   elModeBadge.textContent = edit ? "IMAGE EDIT" : "TEXT TO IMAGE";
   elModeBadge.classList.toggle("edit", edit);
 }
@@ -296,6 +307,11 @@ async function pollStatus() {
       : s.turbo?.available
       ? "Turbo 利用可能 · ローカル実行"
       : `Turbo 準備が必要: ${s.turbo?.error || "設定を確認してください"}`;
+    const mossBackend = state.backend === "moss_int8" ? "moss_int8" : "moss";
+    $("#moss-status").textContent = s.backend === mossBackend && s.status === "error"
+      ? `MOSS エラー: ${s.error}`
+      : s[mossBackend]?.available ? "MOSS 利用可能 · ローカル実行"
+      : `MOSS 準備が必要: ${s[mossBackend]?.error || "設定を確認してください"}`;
     elStatusBar.textContent = `${dev} · ${st}${s.gpu_name ? ` · ${s.gpu_name}` : ""}`;
   } catch {
     /* サーバー未起動時は無視 */
@@ -318,17 +334,21 @@ async function generate() {
   const payload = {
     prompt,
     negative_prompt: $("#negative-prompt").value.trim() || null,
-    images: state.refs.map((r) => r.dataUrl),
+    images: state.backend.startsWith("moss") ? [] : state.refs.map((r) => r.dataUrl),
     width: clampInt(elWidth.value, 256, 4096, 1024),
     height: clampInt(elHeight.value, 256, 4096, 1024),
     steps: clampInt(elSteps.value, 1, 300, 40),
-    cfg: Math.min(30, Math.max(0, parseFloat(elCfg.value) || 1)),
+    cfg: Math.min(30, Math.max(0, Number.isNaN(parseFloat(elCfg.value)) ? 1 : parseFloat(elCfg.value))),
     seed: Number.isNaN(parseInt(elSeed.value, 10)) ? -1 : parseInt(elSeed.value, 10),
     backend: state.backend,
   };
 
   if (state.backend === "turbo" && !state.refs.length && (payload.width % 32 || payload.height % 32)) {
     toast("Turbo の幅・高さは32の倍数を指定してください", true);
+    return;
+  }
+  if (state.backend.startsWith("moss") && (payload.width % 16 || payload.height % 16)) {
+    toast("MOSS の幅・高さは16の倍数を指定してください", true);
     return;
   }
 
@@ -414,7 +434,8 @@ function onDone(msg) {
 
   elDownload.href = dataUrl;
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  elDownload.download = `qwen-image-${stamp}.png`;
+  const prefix = msg.meta?.backend?.startsWith("MOSS") ? "moss-image" : "qwen-image";
+  elDownload.download = `${prefix}-${stamp}.png`;
   elDownload.classList.remove("hidden");
 
   setGenerating(false);

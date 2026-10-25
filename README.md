@@ -2,13 +2,19 @@
 
 [English](README.md) · [日本語](README.ja.md) · [简体中文](README.zh-CN.md)
 
-A local browser app for **Qwen-Image-2.1** text-to-image generation and reference-based editing. Choose the standard Diffusers model or **Turbo INT8 ConvRot**. Images stay local; no external image API is used.
+A local browser app for **Qwen-Image-2.1** generation/editing and **MOSS-Image-SFT** text/layout generation. Choose the standard Qwen model, **Turbo INT8 ConvRot**, or **MOSS-Image-SFT**. Images stay local; no external image API is used.
 
 | Text to image | Image edit: blue → red ceramic |
 |---|---|
 | ![Blue ceramic bird generated with Turbo](docs/images/turbo-text-to-image.png) | ![Ceramic bird recolored with Turbo](docs/images/turbo-image-edit.png) |
 
 Generated with this app. Prompts and settings: [sample notes](docs/SAMPLES.md).
+
+| MOSS-Image-SFT BF16 | MOSS-Image-SFT INT8 ConvRot |
+|---|---|
+| ![MOSS botanical poster, BF16](docs/images/moss-sft-bf16.png) | ![MOSS botanical poster, INT8](docs/images/moss-sft-int8.png) |
+
+Both generated at 1024×1024, 50 steps, CFG 3, seed 42. [MOSS validation and sample prompt](docs/MOSS_VALIDATION.md).
 
 ## Features and platforms
 
@@ -17,7 +23,7 @@ Generated with this app. Prompts and settings: [sample notes](docs/SAMPLES.md).
 - Aspect presets including **2:3 (832×1248)**; progress, errors, preview, PNG download.
 - Isolated Turbo environment and headless worker. No ComfyUI HTTP server required.
 - Standard model loads lazily and is released before Turbo. Turbo exits after each job. Other applications are never stopped.
-- Model selection offers standard BF16 and Turbo; GGUF was removed from the UI.
+- Model selection offers Qwen BF16, Qwen Turbo, and MOSS-Image-SFT; GGUF was removed from the UI.
 
 | Platform | Standard backend | Turbo | Verification |
 |---|---|---|---|
@@ -37,6 +43,40 @@ cd qwen-image-studio
 uv venv --python 3.12 .venv
 uv pip install --python .venv -r requirements-web.txt
 ```
+
+### MOSS-Image-SFT: Windows / Linux NVIDIA
+
+After installing the web app, run:
+
+```powershell
+# Windows
+.\.venv\Scripts\python.exe setup_moss.py
+```
+
+```sh
+# Ubuntu/Linux
+.venv/bin/python setup_moss.py
+```
+
+Setup creates a separate `.venv-moss`, downloads approximately **27.3 GB** of the [official model](https://huggingface.co/OpenMOSS-Team/MOSS-Image-SFT) into `models/hf-cache/hub`, and writes ignored local `moss_config.json`. Existing Qwen/Turbo environments are unchanged. To reuse a complete official local model directory, add `--model /path/to/MOSS-Image-SFT`.
+
+Launch normally and select **MOSS-Image-SFT**. Defaults are **50 steps, CFG 3, Flow-matching Euler, shift 5, negative-branch skip layer [22], BF16 transformer/text encoder and FP32 VAE**, with a CPU random generator. Size must be a multiple of 16. Settings remain editable and are remembered separately from Qwen's settings. The official custom code and weights are pinned to revision `f972bd4b4b9e3852133cc5da954d87bc32cd8fb9`; the worker loads them offline. The setup downloads executable official custom pipeline code, so review the upstream repository before running it.
+
+MOSS accepts natural language, tags, and JSON layout prompts. It **does not accept reference-image editing**: the reference upload is disabled while selected, and the API rejects image inputs instead of silently ignoring them. Previously added Qwen references are retained when switching back. MOSS currently requires NVIDIA CUDA in this app; macOS is unsupported. GPU inference on Linux remains unverified here. Each job exits to release its GPU resources. [Official guide](https://github.com/OpenMOSS/MOSS-Image), [model code and Apache-2.0 terms](https://huggingface.co/OpenMOSS-Team/MOSS-Image-SFT).
+
+### MOSS INT8 ConvRot: Windows / Linux NVIDIA
+
+Run `.venv\Scripts\python.exe setup_moss_int8.py` on Windows, or `.venv/bin/python setup_moss_int8.py` on Linux. Then select **MOSS-Image-SFT INT8**. It uses the distributed [Comfy-Org INT8 checkpoints](https://huggingface.co/Comfy-Org/MOSS-Image/tree/24147db865fcdc207270f844777587223fed8d6e):
+
+| Component | Format | Bytes |
+|---|---|---:|
+| `diffusion_models/moss_image_sft_int8_convrot.safetensors` | INT8 ConvRot DiT | 5,413,698,958 |
+| `text_encoders/qwen3.5_9b_int8_convrot.safetensors` | INT8 ConvRot text encoder | 9,748,121,532 |
+| `vae/flux2-vae_small.safetensors` | Small VAE, decoded in FP32 | 249,521,340 |
+
+This is actual INT8 ConvRot, not FP8 or GGUF. Weights/scales and some unquantized layers use mixed types. Setup downloads approximately 15.4 GB; use `--model-dir /path/to/local/snapshot` to reuse that directory layout. It reuses the unchanged pinned `.vendor/ComfyUI` and `.venv-turbo` if already present; otherwise it prepares `.venv-moss-int8`. Local paths are stored in ignored `moss_int8_config.json`.
+
+Defaults: 50 steps, CFG 3, Euler, native `normal` schedule, shift 5, negative-branch layer 22 skipped throughout. The native schedule approximates the official Diffusers schedule before its training-grid snapping; matching seeds do not imply matching pixels across the two runtimes. INT8 also accepts text/layout only and uses an offline per-job worker, without a ComfyUI server.
 
 ### Turbo: Windows / Linux NVIDIA
 
@@ -108,7 +148,7 @@ Turbo sigmas: `1, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.41
 
 ```sh
 uv pip install --python .venv -r requirements-dev.txt
-.venv/bin/python -m unittest test_turbo -v
+.venv/bin/python -m unittest test_turbo test_moss -v
 .venv-turbo/bin/python check_native_turbo.py
 ```
 

@@ -5,6 +5,8 @@ outputs/
 __pycache__/
 *.py[cod]
 turbo_config.json
+moss_config.json
+moss_int8_config.json
 *.local.*
 _local/
 .env

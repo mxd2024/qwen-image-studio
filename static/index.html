@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Local Diffusers Studio — Qwen-Image-2.1</title>
+  <title>Local Diffusers Studio — Qwen / MOSS Image</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
@@ -15,7 +15,7 @@
       <div class="eyebrow mono">LOCAL DIFFUSERS STUDIO</div>
       <h1>言葉とイメージから、<br /><span class="grad">次の一枚をつくる。</span></h1>
     </div>
-    <p class="hero-desc">Qwen-Image-2.1をローカルGPUで実行。参照画像を追加すると、そのまま編集モードになります。</p>
+    <p class="hero-desc">Qwen-Image-2.1／MOSS-Image-SFTをローカルGPUで実行。Qwenは参照画像による編集にも対応。</p>
   </header>
 
   <!-- ===================== メイングリッド ===================== -->
@@ -81,9 +81,17 @@
           <button type="button" class="mopt" data-backend="turbo">
             Qwen-Image-2.1 Turbo <em>INT8 ConvRot · 8 steps</em>
           </button>
+          <button type="button" class="mopt" data-backend="moss">
+            MOSS-Image-SFT <em>BF16 · テキスト／レイアウト生成</em>
+          </button>
+          <button type="button" class="mopt" data-backend="moss_int8">
+            MOSS-Image-SFT INT8 <em>ConvRot · DiT / テキストエンコーダ</em>
+          </button>
         </div>
         <p id="turbo-note" class="model-note hidden">公式8ステップ・CFG 1固定。編集サイズは参照画像1に追従（32の倍数）。</p>
         <p id="turbo-status" class="model-note hidden" role="status"></p>
+        <p id="moss-note" class="model-note hidden">公式既定: 50ステップ・CFG 3。参照画像編集はQwenを選択してください。</p>
+        <p id="moss-status" class="model-note hidden" role="status"></p>
 
         <div class="presets" id="presets"></div>
 

@@ -7,6 +7,8 @@ Local Diffusers Studio — Qwen-Image-2.1 ローカル画像生成 Web アプリ
 
 モデルバックエンド:
     diffusers : Qwen/Qwen-Image-2.1 を QwenImage21Pipeline で直接実行（既定）
+    turbo     : 専用環境の headless ComfyUI worker（公式8ステップ）
+    moss      : OpenMOSS-Team/MOSS-Image-SFT の公式パイプライン（生成専用）
     gguf      : abenzerps/Qwen-Image-2.1-Uncensored-GGUF をローカル ComfyUI
                 (leejet/ComfyUI-GGUF) 経由で実行
 
@@ -85,7 +87,7 @@ class GenerateRequest(BaseModel):
     steps: int = Field(40, ge=1, le=300)
     cfg: float = Field(1.0, ge=0.0, le=30.0)
     seed: Optional[int] = -1          # -1 以下はランダム
-    backend: Literal["diffusers", "gguf", "turbo"] = "diffusers"
+    backend: Literal["diffusers", "gguf", "turbo", "moss", "moss_int8"] = "diffusers"
     quant: str = "Q4_K_M"             # GGUF量子化 (backend=gguf のみ)
 
 
@@ -505,21 +507,37 @@ def turbo_config() -> Dict:
     return config
 
 
-def run_turbo_job(job_id: str, params: GenerateRequest) -> None:
+def moss_config(backend="moss") -> Dict:
+    path = Path(_BASE_DIR) / f"{backend}_config.json"
+    if not path.is_file():
+        raise RuntimeError(f"MOSS の準備が必要です。python setup_{backend}.py を実行してください（NVIDIA CUDA必須）")
+    config = json.loads(path.read_text(encoding="utf-8-sig"))
+    required = ("python", "comfy", "transformer", "encoder", "vae") if backend == "moss_int8" else ("python", "model")
+    if any(not Path(config[key]).exists() for key in required):
+        raise RuntimeError(f"MOSS の環境またはモデルが見つかりません。setup_{backend}.py を再実行してください")
+    if backend == "moss" and not (Path(config["model"]) / "pipeline_moss_image.py").is_file():
+        raise RuntimeError("公式のpipeline_moss_image.pyが見つかりません。setup_moss.py を再実行してください")
+    return config
+
+
+def run_worker_job(job_id: str, params: GenerateRequest) -> None:
     q = JOBS[job_id]
     started = time.time()
+    turbo = params.backend == "turbo"
+    label = "Turbo INT8 ConvRot" if turbo else "MOSS-Image-SFT INT8" if params.backend == "moss_int8" else "MOSS-Image-SFT"
     try:
-        STATE.update(backend="turbo", status="loading", error=None, device="cuda", dtype="INT8 ConvRot")
-        config = turbo_config()
+        STATE.update(backend=params.backend, status="loading", error=None, device="cuda",
+                     dtype="INT8 ConvRot" if turbo or params.backend == "moss_int8" else "BF16 / VAE FP32")
+        config = turbo_config() if turbo else moss_config(params.backend)
         seed = params.seed if params.seed is not None and params.seed >= 0 else random.randint(0, 2 ** 31 - 1)
-        with tempfile.TemporaryDirectory(prefix="qwen-turbo-") as directory:
+        with tempfile.TemporaryDirectory(prefix=f"studio-{params.backend}-") as directory:
             request = Path(directory) / "request.json"
             output = Path(directory) / "result.png"
             request.write_text(json.dumps({**params.model_dump(), "seed": seed, "config": config}), encoding="utf-8")
-            q.put({"type": "status", "message": "Turbo INT8 ConvRot を読み込み中…"})
+            q.put({"type": "status", "message": f"{label} を読み込み中…"})
             log = []
             with subprocess.Popen(
-                [config["python"], "-u", str(Path(_BASE_DIR) / "turbo_worker.py"), str(request), str(output)],
+                [config["python"], "-u", str(Path(_BASE_DIR) / f"{params.backend}_worker.py"), str(request), str(output)],
                 cwd=_BASE_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 encoding="utf-8", errors="replace",
                 env={**os.environ, "PYTHONIOENCODING": "utf-8"},
@@ -536,18 +554,20 @@ def run_turbo_job(job_id: str, params: GenerateRequest) -> None:
                         log = log[-12:]
                         encoding = sys.stdout.encoding or "utf-8"
                         safe_line = line.rstrip().encode(encoding, errors="backslashreplace").decode(encoding)
-                        print("[turbo]", safe_line, flush=True)
+                        print(f"[{params.backend}]", safe_line, flush=True)
                 code = worker.wait()
             if code != 0 or not output.is_file():
-                raise RuntimeError(f"Turbo worker failed (exit {code}): " +
+                raise RuntimeError(f"{label} worker failed (exit {code}): " +
                                    ("\n".join(log)[-3000:] or "出力画像がありません。workerが中断されました"))
             from PIL import Image
             with Image.open(output) as image:
                 width, height = image.size
             q.put({"type": "done", "image_b64": base64.b64encode(output.read_bytes()).decode("ascii"), "meta": {
-                "width": width, "height": height, "steps": 8, "cfg": 1.0, "seed": seed,
+                "width": width, "height": height, "steps": 8 if turbo else params.steps,
+                "cfg": 1.0 if turbo else params.cfg, "seed": seed,
                 "elapsed_sec": round(time.time() - started, 1),
-                "mode": "edit" if params.images else "t2i", "backend": "turbo INT8 ConvRot",
+                "mode": "edit" if params.images else "t2i",
+                "backend": "turbo INT8 ConvRot" if turbo else label,
             }})
         STATE.update(status="idle", device=None, dtype=None)
     except Exception as exc:
@@ -556,12 +576,22 @@ def run_turbo_job(job_id: str, params: GenerateRequest) -> None:
         q.put({"type": "error", "message": message})
 
 
+def run_turbo_job(job_id: str, params: GenerateRequest) -> None:
+    run_worker_job(job_id, params)
+
+
+def run_moss_job(job_id: str, params: GenerateRequest) -> None:
+    run_worker_job(job_id, params)
+
+
 def run_generation(job_id: str, params: GenerateRequest) -> None:
     try:
         if params.backend != "diffusers":
             unload_diffusers()
         if params.backend == "turbo":
             run_turbo_job(job_id, params)
+        elif params.backend in ("moss", "moss_int8"):
+            run_moss_job(job_id, params)
         elif params.backend == "gguf":
             STATE.update(backend="gguf", status="idle", error=None)
             run_gguf_job(job_id, params)
@@ -612,6 +642,12 @@ def api_status():
         out["turbo"] = {"available": True, "steps": 8, "cfg": 1.0}
     except Exception as exc:
         out["turbo"] = {"available": False, "error": str(exc)}
+    for backend in ("moss", "moss_int8"):
+        try:
+            moss_config(backend)
+            out[backend] = {"available": True, "steps": 50, "cfg": 3.0, "image_edit": False}
+        except Exception as exc:
+            out[backend] = {"available": False, "error": str(exc), "image_edit": False}
     return out
 
 
@@ -626,6 +662,15 @@ def api_generate(req: GenerateRequest):
         if not req.images and (req.width % 32 or req.height % 32):
             raise HTTPException(status_code=422, detail="Turbo の幅・高さは32の倍数を指定してください")
         req = req.model_copy(update={"steps": 8, "cfg": 1.0})
+    if req.backend in ("moss", "moss_int8"):
+        if req.images:
+            raise HTTPException(status_code=422, detail="MOSS-Image-SFT はテキスト／レイアウト生成専用です。参照画像の編集にはQwenを選択してください")
+        if req.width % 16 or req.height % 16:
+            raise HTTPException(status_code=422, detail="MOSS の幅・高さは16の倍数を指定してください")
+        req = req.model_copy(update={
+            "steps": req.steps if "steps" in req.model_fields_set else 50,
+            "cfg": req.cfg if "cfg" in req.model_fields_set else 3.0,
+        })
 
     if not GEN_LOCK.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="別の生成が進行中です。完了をお待ちください")

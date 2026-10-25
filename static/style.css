@@ -251,6 +251,7 @@ input[type="number"]::-webkit-inner-spin-button { opacity: 0.3; }
   background: var(--lime-soft);
 }
 .mopt.active em { color: var(--lime); }
+.dropzone[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
 input:disabled, .dice:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .model-note {
